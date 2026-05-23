@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-google-maps-fetch",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "n8n community node that fetches Google Maps search HTML with browser-like fingerprint and full cookie capture (NID, CONSENT, SOCS, AEC)",
   "keywords": [
     "n8n-community-node-package",
@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "node --test \"test/**/*.test.js\"",
+    "pretest": "tsc",
     "prepublishOnly": "npm run build"
   },
   "files": [
@@ -38,7 +40,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "got-scraping": "^3.2.15",
+    "got-scraping": "3.2.15",
     "tough-cookie": "^4.1.4"
   },
   "peerDependencies": {
