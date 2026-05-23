@@ -1,47 +1,47 @@
 {
   "name": "n8n-nodes-google-maps-fetch",
-  "version": "0.1.1",
-  "description": "n8n node that fetches Google Maps search HTML with browser-like fingerprint and cookie capture (NID, CONSENT, SOCS, AEC)",
+  "version": "0.1.4",
+  "description": "n8n community node that fetches Google Maps search HTML with browser-like fingerprint and full cookie capture (NID, CONSENT, SOCS, AEC)",
   "keywords": [
     "n8n-community-node-package",
-    "n8n",
     "google-maps",
     "scraping",
     "cookies",
     "nid"
   ],
   "license": "MIT",
-  "homepage": "",
   "author": {
-    "name": "Akhilesh Chitlangia"
+    "name": "Shagun Chaturvedi"
+  },
+  "engines": {
+    "node": ">=18.10"
   },
   "main": "index.js",
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
+  "files": [
+    "dist"
+  ],
   "n8n": {
     "n8nNodesApiVersion": 1,
     "nodes": [
       "dist/nodes/GoogleMapsFetch/GoogleMapsFetch.node.js"
     ]
   },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/tough-cookie": "^4.0.5",
+    "n8n-workflow": "^1.120.13",
+    "typescript": "^5.4.5"
+  },
   "dependencies": {
-    "got-scraping": "^4.0.6",
+    "got-scraping": "^3.2.15",
     "tough-cookie": "^4.1.4"
   },
   "peerDependencies": {
     "n8n-workflow": "*"
-  },
-  "devDependencies": {
-    "n8n-workflow": "^1.82.0",
-    "typescript": "^5.4.5",
-    "@types/node": "^20.12.7",
-    "@types/tough-cookie": "^4.0.5"
   }
 }
