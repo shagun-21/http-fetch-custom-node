@@ -1,12 +1,64 @@
 import {
 	IExecuteFunctions,
+	IDataObject,
+	IHttpRequestOptions,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 	NodeOperationError,
 } from 'n8n-workflow';
-import { gotScraping } from 'got-scraping';
 import { CookieJar } from 'tough-cookie';
+
+// Realistic, browser-like header sets per device profile. This replaces
+// got-scraping's header-generator so the node has no ESM-only dependency
+// (n8n loads community nodes via CommonJS require).
+const HEADER_PROFILES: Record<string, IDataObject> = {
+	'chrome-desktop': {
+		'User-Agent':
+			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+		Accept:
+			'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+		'Accept-Language': 'en-US,en;q=0.9',
+		'Accept-Encoding': 'gzip, deflate, br',
+		'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+		'sec-ch-ua-mobile': '?0',
+		'sec-ch-ua-platform': '"Windows"',
+		'Sec-Fetch-Dest': 'document',
+		'Sec-Fetch-Mode': 'navigate',
+		'Sec-Fetch-Site': 'none',
+		'Sec-Fetch-User': '?1',
+		'Upgrade-Insecure-Requests': '1',
+	},
+	'chrome-mobile': {
+		'User-Agent':
+			'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+		Accept:
+			'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+		'Accept-Language': 'en-US,en;q=0.9',
+		'Accept-Encoding': 'gzip, deflate, br',
+		'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+		'sec-ch-ua-mobile': '?1',
+		'sec-ch-ua-platform': '"Android"',
+		'Sec-Fetch-Dest': 'document',
+		'Sec-Fetch-Mode': 'navigate',
+		'Sec-Fetch-Site': 'none',
+		'Sec-Fetch-User': '?1',
+		'Upgrade-Insecure-Requests': '1',
+	},
+	'firefox-desktop': {
+		'User-Agent':
+			'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+		Accept:
+			'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+		'Accept-Language': 'en-US,en;q=0.5',
+		'Accept-Encoding': 'gzip, deflate, br',
+		'Sec-Fetch-Dest': 'document',
+		'Sec-Fetch-Mode': 'navigate',
+		'Sec-Fetch-Site': 'none',
+		'Sec-Fetch-User': '?1',
+		'Upgrade-Insecure-Requests': '1',
+	},
+};
 
 export class GoogleMapsFetch implements INodeType {
 	description: INodeTypeDescription = {
@@ -76,7 +128,7 @@ export class GoogleMapsFetch implements INodeType {
 						type: 'string',
 						default: '',
 						placeholder: 'http://user:pass@host:port',
-						description: 'HTTP/HTTPS/SOCKS proxy URL (e.g. Evomi residential)',
+						description: 'HTTP/HTTPS proxy URL (e.g. Evomi residential)',
 						typeOptions: { password: true },
 					},
 					{
@@ -168,36 +220,76 @@ export class GoogleMapsFetch implements INodeType {
 					}
 				}
 
-				// Device fingerprint profile for header-generator
-				const deviceMap: Record<string, any> = {
-					'chrome-desktop': {
-						devices: ['desktop'],
-						operatingSystems: ['windows'],
-						browsers: [{ name: 'chrome', minVersion: 120 }],
-					},
-					'chrome-mobile': {
-						devices: ['mobile'],
-						operatingSystems: ['android'],
-						browsers: [{ name: 'chrome', minVersion: 120 }],
-					},
-					'firefox-desktop': {
-						devices: ['desktop'],
-						operatingSystems: ['windows'],
-						browsers: [{ name: 'firefox', minVersion: 120 }],
-					},
+				// Browser-like header profile (replaces header-generator)
+				const baseHeaders = {
+					...(HEADER_PROFILES[options.device || 'chrome-desktop'] ||
+						HEADER_PROFILES['chrome-desktop']),
 				};
-				const headerOptions = deviceMap[options.device || 'chrome-desktop'];
 
-				const response = await gotScraping({
-					url,
-					cookieJar: jar,
-					timeout: { request: options.timeout ?? 30000 },
-					proxyUrl: options.proxyUrl || undefined,
-					followRedirect: options.followRedirect !== false,
-					headerGeneratorOptions: headerOptions,
-					retry: { limit: 0 },
-					throwHttpErrors: false,
-				});
+				// Parse proxy URL into n8n's proxy option shape
+				let proxy: IHttpRequestOptions['proxy'];
+				if (options.proxyUrl) {
+					const p = new URL(options.proxyUrl);
+					proxy = {
+						host: p.hostname,
+						port: Number(p.port) || (p.protocol === 'https:' ? 443 : 80),
+						protocol: p.protocol.replace(':', ''),
+					};
+					if (p.username || p.password) {
+						proxy.auth = {
+							username: decodeURIComponent(p.username),
+							password: decodeURIComponent(p.password),
+						};
+					}
+				}
+
+				const followRedirect = options.followRedirect !== false;
+				const maxRedirects = 10;
+				let currentUrl = url;
+				let response: { statusCode: number; headers: IDataObject; body: string };
+				let redirects = 0;
+
+				// Manually follow redirects so we can capture Set-Cookie at every hop.
+				// eslint-disable-next-line no-constant-condition
+				while (true) {
+					const cookieHeader = await jar.getCookieString(currentUrl);
+					const headers: IDataObject = { ...baseHeaders };
+					if (cookieHeader) headers.Cookie = cookieHeader;
+
+					response = (await this.helpers.httpRequest({
+						url: currentUrl,
+						method: 'GET',
+						headers,
+						timeout: options.timeout ?? 30000,
+						proxy,
+						encoding: 'text',
+						disableFollowRedirect: true,
+						returnFullResponse: true,
+						ignoreHttpStatusErrors: true,
+					})) as unknown as { statusCode: number; headers: IDataObject; body: string };
+
+					// Capture cookies set on this hop
+					const setCookie = response.headers['set-cookie'];
+					if (setCookie) {
+						const list = Array.isArray(setCookie) ? setCookie : [setCookie as string];
+						for (const sc of list) {
+							try {
+								await jar.setCookie(sc, currentUrl);
+							} catch {
+								/* ignore malformed */
+							}
+						}
+					}
+
+					const status = response.statusCode;
+					const location = response.headers.location as string | undefined;
+					if (followRedirect && status >= 300 && status < 400 && location && redirects < maxRedirects) {
+						currentUrl = new URL(location, currentUrl).toString();
+						redirects++;
+						continue;
+					}
+					break;
+				}
 
 				// Read all cookies in the jar (covers redirect chain too)
 				const allCookies = await jar.getCookies('https://www.google.com');
@@ -209,9 +301,10 @@ export class GoogleMapsFetch implements INodeType {
 					.map((c) => `${c.key}=${c.value}`)
 					.join('; ');
 
+				const body = response.body ?? '';
 				const out: Record<string, any> = {
 					url,
-					final_url: response.url,
+					final_url: currentUrl,
 					status: response.statusCode,
 					cookies: cookieMap,
 					cookie_string: cookieString,
@@ -220,11 +313,11 @@ export class GoogleMapsFetch implements INodeType {
 					socs: cookieMap.SOCS || null,
 					aec: cookieMap.AEC || null,
 					response_headers: response.headers,
-					html_length: response.body.length,
+					html_length: body.length,
 				};
 
 				if (options.returnHtml !== false) {
-					out.html = response.body;
+					out.html = body;
 				}
 
 				returnData.push({ json: out, pairedItem: i });

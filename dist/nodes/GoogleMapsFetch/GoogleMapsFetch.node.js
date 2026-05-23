@@ -2,8 +2,48 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GoogleMapsFetch = void 0;
 const n8n_workflow_1 = require("n8n-workflow");
-const got_scraping_1 = require("got-scraping");
 const tough_cookie_1 = require("tough-cookie");
+const HEADER_PROFILES = {
+    'chrome-desktop': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+    },
+    'chrome-mobile': {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+    },
+    'firefox-desktop': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+    },
+};
 class GoogleMapsFetch {
     constructor() {
         this.description = {
@@ -72,7 +112,7 @@ class GoogleMapsFetch {
                             type: 'string',
                             default: '',
                             placeholder: 'http://user:pass@host:port',
-                            description: 'HTTP/HTTPS/SOCKS proxy URL (e.g. Evomi residential)',
+                            description: 'HTTP/HTTPS proxy URL (e.g. Evomi residential)',
                             typeOptions: { password: true },
                         },
                         {
@@ -119,7 +159,7 @@ class GoogleMapsFetch {
         };
     }
     async execute() {
-        var _a;
+        var _a, _b;
         const items = this.getInputData();
         const returnData = [];
         for (let i = 0; i < items.length; i++) {
@@ -151,34 +191,66 @@ class GoogleMapsFetch {
                         }
                     }
                 }
-                const deviceMap = {
-                    'chrome-desktop': {
-                        devices: ['desktop'],
-                        operatingSystems: ['windows'],
-                        browsers: [{ name: 'chrome', minVersion: 120 }],
-                    },
-                    'chrome-mobile': {
-                        devices: ['mobile'],
-                        operatingSystems: ['android'],
-                        browsers: [{ name: 'chrome', minVersion: 120 }],
-                    },
-                    'firefox-desktop': {
-                        devices: ['desktop'],
-                        operatingSystems: ['windows'],
-                        browsers: [{ name: 'firefox', minVersion: 120 }],
-                    },
+                const baseHeaders = {
+                    ...(HEADER_PROFILES[options.device || 'chrome-desktop'] ||
+                        HEADER_PROFILES['chrome-desktop']),
                 };
-                const headerOptions = deviceMap[options.device || 'chrome-desktop'];
-                const response = await (0, got_scraping_1.gotScraping)({
-                    url,
-                    cookieJar: jar,
-                    timeout: { request: (_a = options.timeout) !== null && _a !== void 0 ? _a : 30000 },
-                    proxyUrl: options.proxyUrl || undefined,
-                    followRedirect: options.followRedirect !== false,
-                    headerGeneratorOptions: headerOptions,
-                    retry: { limit: 0 },
-                    throwHttpErrors: false,
-                });
+                let proxy;
+                if (options.proxyUrl) {
+                    const p = new URL(options.proxyUrl);
+                    proxy = {
+                        host: p.hostname,
+                        port: Number(p.port) || (p.protocol === 'https:' ? 443 : 80),
+                        protocol: p.protocol.replace(':', ''),
+                    };
+                    if (p.username || p.password) {
+                        proxy.auth = {
+                            username: decodeURIComponent(p.username),
+                            password: decodeURIComponent(p.password),
+                        };
+                    }
+                }
+                const followRedirect = options.followRedirect !== false;
+                const maxRedirects = 10;
+                let currentUrl = url;
+                let response;
+                let redirects = 0;
+                while (true) {
+                    const cookieHeader = await jar.getCookieString(currentUrl);
+                    const headers = { ...baseHeaders };
+                    if (cookieHeader)
+                        headers.Cookie = cookieHeader;
+                    response = (await this.helpers.httpRequest({
+                        url: currentUrl,
+                        method: 'GET',
+                        headers,
+                        timeout: (_a = options.timeout) !== null && _a !== void 0 ? _a : 30000,
+                        proxy,
+                        encoding: 'text',
+                        disableFollowRedirect: true,
+                        returnFullResponse: true,
+                        ignoreHttpStatusErrors: true,
+                    }));
+                    const setCookie = response.headers['set-cookie'];
+                    if (setCookie) {
+                        const list = Array.isArray(setCookie) ? setCookie : [setCookie];
+                        for (const sc of list) {
+                            try {
+                                await jar.setCookie(sc, currentUrl);
+                            }
+                            catch {
+                            }
+                        }
+                    }
+                    const status = response.statusCode;
+                    const location = response.headers.location;
+                    if (followRedirect && status >= 300 && status < 400 && location && redirects < maxRedirects) {
+                        currentUrl = new URL(location, currentUrl).toString();
+                        redirects++;
+                        continue;
+                    }
+                    break;
+                }
                 const allCookies = await jar.getCookies('https://www.google.com');
                 const cookieMap = {};
                 for (const c of allCookies) {
@@ -187,9 +259,10 @@ class GoogleMapsFetch {
                 const cookieString = allCookies
                     .map((c) => `${c.key}=${c.value}`)
                     .join('; ');
+                const body = (_b = response.body) !== null && _b !== void 0 ? _b : '';
                 const out = {
                     url,
-                    final_url: response.url,
+                    final_url: currentUrl,
                     status: response.statusCode,
                     cookies: cookieMap,
                     cookie_string: cookieString,
@@ -198,10 +271,10 @@ class GoogleMapsFetch {
                     socs: cookieMap.SOCS || null,
                     aec: cookieMap.AEC || null,
                     response_headers: response.headers,
-                    html_length: response.body.length,
+                    html_length: body.length,
                 };
                 if (options.returnHtml !== false) {
-                    out.html = response.body;
+                    out.html = body;
                 }
                 returnData.push({ json: out, pairedItem: i });
             }

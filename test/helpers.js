@@ -1,49 +1,41 @@
 'use strict';
 
-const Module = require('module');
-
 /**
- * Replace `got-scraping` in the require cache with a fake before the node is
- * loaded, so execute() never hits the network. Returns a controller object:
- *   - calls:   array of option objects gotScraping was called with
- *   - setResponse(res): the next (and subsequent) responses to return
- *   - setError(err):    make the next call reject
+ * Build a fake httpRequest (n8n's this.helpers.httpRequest) that records every
+ * call and returns queued responses in order (the last queued response repeats
+ * for any extra calls, e.g. redirect hops).
+ *
+ * @param {Array<object|function>} responses  response objects, or functions
+ *        (opts) => response. A response is { statusCode, headers, body }.
+ *        Pass a single Error to make every call reject.
  */
-function mockGotScraping() {
-	const controller = {
-		calls: [],
-		_response: null,
-		_error: null,
-		setResponse(res) {
-			this._response = res;
-			this._error = null;
-		},
-		setError(err) {
-			this._error = err;
-		},
-	};
+function makeHttpRequest(responses) {
+	if (responses instanceof Error) {
+		const err = responses;
+		const fn = async (opts) => {
+			fn.calls.push(opts);
+			throw err;
+		};
+		fn.calls = [];
+		return fn;
+	}
 
-	const fakeGotScraping = async (opts) => {
-		controller.calls.push(opts);
-		if (controller._error) throw controller._error;
-		return controller._response;
+	const queue = Array.isArray(responses) ? responses : [responses];
+	let i = 0;
+	const fn = async (opts) => {
+		fn.calls.push(opts);
+		const r = queue[Math.min(i, queue.length - 1)];
+		i++;
+		return typeof r === 'function' ? r(opts) : r;
 	};
-
-	const id = require.resolve('got-scraping');
-	require.cache[id] = {
-		id,
-		filename: id,
-		loaded: true,
-		exports: { gotScraping: fakeGotScraping },
-	};
-
-	return controller;
+	fn.calls = [];
+	return fn;
 }
 
 /**
  * Build a minimal fake IExecuteFunctions for a single input item.
- * @param {object} params  flat map of parameter name -> value
- * @param {object} opts    { continueOnFail }
+ * @param {object} params flat map of parameter name -> value
+ * @param {object} opts   { continueOnFail, httpRequest }
  */
 function makeContext(params, opts = {}) {
 	return {
@@ -52,13 +44,15 @@ function makeContext(params, opts = {}) {
 			name in params ? params[name] : fallback,
 		continueOnFail: () => opts.continueOnFail === true,
 		getNode: () => ({ name: 'Google Maps Fetch', type: 'googleMapsFetch' }),
+		helpers: {
+			httpRequest: opts.httpRequest || makeHttpRequest(fakeResponse()),
+		},
 	};
 }
 
-/** A canned successful response from gotScraping. */
+/** A canned successful full-response (returnFullResponse shape). */
 function fakeResponse(overrides = {}) {
 	return {
-		url: 'https://www.google.com/maps/search/test',
 		statusCode: 200,
 		headers: { 'content-type': 'text/html' },
 		body: '<html>maps</html>',
@@ -66,4 +60,4 @@ function fakeResponse(overrides = {}) {
 	};
 }
 
-module.exports = { mockGotScraping, makeContext, fakeResponse };
+module.exports = { makeHttpRequest, makeContext, fakeResponse };
