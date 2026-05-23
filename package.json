@@ -1,12 +1,35 @@
 {
   "name": "n8n-nodes-google-maps-fetch",
-  "version": "0.1.0",
-  "description": "n8n node that fetches Google Maps search HTML with browser-like fingerprint and cookie capture",
+  "version": "0.1.1",
+  "description": "n8n node that fetches Google Maps search HTML with browser-like fingerprint and cookie capture (NID, CONSENT, SOCS, AEC)",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "google-maps",
+    "scraping",
+    "cookies",
+    "nid"
+  ],
   "license": "MIT",
+  "homepage": "",
+  "author": {
+    "name": "Akhilesh Chitlangia"
+  },
   "main": "index.js",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "nodes": [
+      "dist/nodes/GoogleMapsFetch/GoogleMapsFetch.node.js"
+    ]
   },
   "dependencies": {
     "got-scraping": "^4.0.6",
